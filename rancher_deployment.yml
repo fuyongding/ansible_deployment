@@ -1,0 +1,125 @@
+---
+- hosts: localhost
+  gather_facts: no
+  vars:
+    parsed_vars: "{{ json_vars | from_json }}"
+    #image_folder_path: "\\wsl$\\Ubuntu{{ playbook_dir | replace('/', '\\\\') }}\\k8_images" # error here
+    image_folder_path: "/k8_images" 
+  tasks:
+    - name: Create ConfigMap with JSON data
+      k8s:
+        state: present
+        namespace: default
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: ansible-configmap
+          data:
+            mydata.json: "{{ parsed_vars | to_nice_json }}" # converts the Ansible variable (which is a dictionary after the from_json filter) back into a formatted JSON string.
+    
+    - name: Check if ansible-pv exists
+      k8s_info:
+        kind: PersistentVolume
+        name: ansible-pv
+      register: pv_result
+
+    - name: Check if ansible-pvc exists
+      k8s_info:
+        kind: PersistentVolumeClaim
+        name: ansible-pvc
+        namespace: default
+      register: pvc_result
+
+    - name: Create a PersistentVolume
+      k8s:
+        state: present
+        namespace: default
+        definition:
+          apiVersion: v1
+          kind: PersistentVolume
+          metadata:
+            name: ansible-pv
+          spec:
+            storageClassName: manual
+            capacity:
+              storage: 1Gi  # adjust this based on your needs
+            accessModes:
+              - ReadWriteOnce
+            hostPath:
+              path: "{{ image_folder_path }}"
+      when: pv_result.resources | length == 0 # when there is no pv with the name ansible-pv
+
+    - name: Create a PersistentVolumeClaim to use the PersistentVolume
+      k8s:
+        state: present
+        namespace: default
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: ansible-pvc
+          spec:
+            storageClassName: manual
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 1Gi  # adjust this based on your needs
+      when: pvc_result.resources | length == 0 # when there is no pvc with the name ansible-pvc
+
+    - name: Deploy Flask app to display configmap data
+      k8s:
+        state: present
+        namespace: default
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: ansible-deployment
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: test-app
+            template:
+              metadata:
+                labels:
+                  app: test-app
+              spec:
+                containers:
+                - name: ansible-container
+                  image: shinglebells/flask-json-data
+                  ports:
+                  - containerPort: 5000
+                  volumeMounts:
+                  - name: config-volume
+                    mountPath: /config
+                  - name: image-data-volume
+                    mountPath: /app/static
+                volumes:
+                - name: config-volume
+                  configMap:
+                    name: ansible-configmap
+                - name: image-data-volume
+                  persistentVolumeClaim:
+                    claimName: ansible-pvc
+
+    - name: Expose Flask app using a NodePort Service
+      k8s:
+        state: present
+        namespace: default
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: flask-service
+          spec:
+            selector:
+              app: test-app
+            ports:
+              - protocol: TCP
+                port: 80
+                targetPort: 5000
+                nodePort: 31000  # Optional: Without this, Kubernetes will dynamically allocate a port for you from the default range.
+            type: NodePort
