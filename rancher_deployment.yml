@@ -3,7 +3,6 @@
   gather_facts: no
   vars:
     parsed_vars: "{{ json_vars | from_json }}"
-    #image_folder_path: "\\wsl$\\Ubuntu{{ playbook_dir | replace('/', '\\\\') }}\\k8_images" # error here
     image_folder_path: "/k8_images" 
   tasks:
     - name: Create ConfigMap with JSON data
@@ -68,7 +67,7 @@
                 storage: 1Gi  # adjust this based on your needs
       when: pvc_result.resources | length == 0 # when there is no pvc with the name ansible-pvc
 
-    - name: Deploy Flask app to display configmap data
+    - name: Deploy Flask app
       k8s:
         state: present
         namespace: default
@@ -123,3 +122,4 @@
                 targetPort: 5000
                 nodePort: 31000  # Optional: Without this, Kubernetes will dynamically allocate a port for you from the default range.
             type: NodePort
+            
